@@ -1,0 +1,12 @@
+Package: sam
+Version: 4.0-1
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Marco A. Rodriguez G. <zopeck@github.com>
+Depends: bash (>= 4.0), dos2unix, moreutils, dc, fdupes
+Description: Utilidad interactiva para búsqueda recursiva y saneamiento de archivos
+ SAM (Search And Move) automatiza la auditoría, cotejo y movimiento masivo 
+ de archivos duplicados mediante listas planas en texto plano. Incluye validaciones 
+ defensivas contra inyección de comandos, control de permisos en directorios 
+ temporales y desduplicación integrada con fdupes.

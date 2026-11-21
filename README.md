@@ -45,4 +45,33 @@ Al ejecutarse por primera vez, SAM crea automáticamente la siguiente estructura
 │   ├── filestomove/
 │   └── movedfiles/
 └── logs/          # Historial de registros anómalos y resumen de actividad
+```
 
+Los archivos procesados se mueven a la ubicación local segura:/tmp/SAMMOVED/
+
+---
+
+## 💻 Uso
+Copia tu archivo de texto plano con los nombres a buscar (un nombre por línea, sin extensión ni ruta) en ~/SAM/compare/.
+
+Otorga permisos de ejecución al script si aún no lo has hecho:
+
+```bash
+chmod +x sam_4.0-1_amd64.sh
+```
+Ejecuta el script:
+
+```bash
+./sam_4.0-1_amd64.sh
+```
+
+Sigue las instrucciones interactivas en pantalla para seleccionar el directorio base, la extensión a buscar y el archivo de cotejo.
+
+---
+
+## 📜 Licencia y Autoría
+Autor: Marco A. Rodriguez G. (@zopeck)
+
+Licencia: GNU General Public License v3.0 (GPLv3). Consulta el archivo COPYING para más detalles.
+
+---

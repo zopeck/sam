@@ -1,8 +1,7 @@
 # SAM (Search And Move) v4.0
 
-**SAM** es una utilidad interactiva en Bash diseñada para entornos GNU/Linux (Debian/Ubuntu y derivados) que automatiza la búsqueda recursiva, auditoría y movimiento masivo de archivos basándose en patrones de extensión y listas de cotejo en texto plano.
-
-Incluye mecanismos defensivos de seguridad de POSIX, prevención de inyección de comandos, control estricto de permisos en directorios temporales y desduplicación opcional mediante `fdupes`.
+**SAM** es una utilidad interactiva en Bash para entornos GNU/Linux (Debian/Ubuntu y derivados), automatiza la búsqueda recursiva, auditoría y movimiento de archivos basándose en patrones de extensión y listas de cotejo en texto plano.
+Incluye defensas de seguridad POSIX, prevención de inyección de comandos, control de permisos en temporales y deduplicación opcional.
 
 ---
 

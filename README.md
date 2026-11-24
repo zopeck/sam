@@ -57,15 +57,15 @@ Los archivos procesados se mueven a la ubicación local segura:/tmp/SAMMOVED/
 ---
 
 ## 💻 Modo de uso:
-Paso 1: Crea un archivo de texto plano en ~/SAM/compare/ con los NOMBRES de los archivos a buscar, SIN su extension (por ejemplo: si el archivo a buscar es "recomendaciones_al_dia.txt" el nombre que se debe colocar es "recomendaciones_al_dia", sin las comillas dobles).
-Paso 2: Ejecuta el script, y selecciona el origen a escanear: Puede ser un dispositivo USB externo (pendrive, SSD o disco mecanico) o un directorio de tu home.
-Paso 3: De el origen del paso 2, selecciona el directorio a escanear, el escaneo del directorio base seleccionado es recursivo (/media/$USER o $HOME).
-Paso 4: Ingresa una extension para escanear, con la cual se generara el catalogo de busqueda (solo la extension "a secas": pdf, doc, txt, mp3, jpg, etc.).
-Paso 5: Selecciona el archivo que contiene los nombres de archivo a escanear, que creaste en el paso 1, de ahi se leeran y cargaran los nombres de archivos a buscar obtenidos del escaneo que genero el catalogo en el paso 4.
-Paso 6: De los nombres del paso 1 y de las extensiones del paso 4, se busca en el catalogo, y, si surgen coincidencias, se indicara la cantidad de archivos para mover al directorio temporal. Si no hubieran coincidencias, el programa termina indicandolo ("there are NO FILES TO MOVE").
-Paso 7: El programa indica que los archivos seram movidos a "/tmp/SAMMOVED/", pero se puede terminar el programa presionando la combinacion de teclas "Ctrl+C".
-Paso 8: Se indica una serie de reportes para validacion: Archivos encontrados, donde fueron encontrados, archivos efectivamente movidos.
-Bonus / Cleanup: Opción de deduplicar los archivos movidos a /tmp/SAMMOVED/ preservando copias únicas y opción de limpiar enlaces rotos.
+- Paso 1: Crea un archivo de texto plano en ~/SAM/compare/ con los NOMBRES de los archivos a buscar, SIN su extension (por ejemplo: si el archivo a buscar es "recomendaciones_al_dia.txt" el nombre que se debe colocar es "recomendaciones_al_dia", sin las comillas dobles).
+- Paso 2: Ejecuta el script, y selecciona el origen a escanear: Puede ser un dispositivo USB externo (pendrive, SSD o disco mecanico) o un directorio de tu home.
+- Paso 3: De el origen del paso 2, selecciona el directorio a escanear, el escaneo del directorio base seleccionado es recursivo (/media/$USER o $HOME).
+- Paso 4: Ingresa una extension para escanear, con la cual se generara el catalogo de busqueda (solo la extension "a secas": pdf, doc, txt, mp3, jpg, etc.).
+- Paso 5: Selecciona el archivo que contiene los nombres de archivo a escanear, que creaste en el paso 1, de ahi se leeran y cargaran los nombres de archivos a buscar obtenidos del escaneo que genero el catalogo en el paso 4.
+- Paso 6: De los nombres del paso 1 y de las extensiones del paso 4, se busca en el catalogo, y, si surgen coincidencias, se indicara la cantidad de archivos para mover al directorio temporal. Si no hubieran coincidencias, el programa termina indicandolo ("there are NO FILES TO MOVE").
+- Paso 7: El programa indica que los archivos seram movidos a "/tmp/SAMMOVED/", pero se puede terminar el programa presionando la combinacion de teclas "Ctrl+C".
+- Paso 8: Se indica una serie de reportes para validacion: Archivos encontrados, donde fueron encontrados, archivos efectivamente movidos.
+- Bonus / Cleanup: Opción de deduplicar los archivos movidos a /tmp/SAMMOVED/ preservando copias únicas y opción de limpiar enlaces rotos.
 
 ---
 

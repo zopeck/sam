@@ -57,7 +57,7 @@ Los archivos procesados se mueven a la ubicación local segura:/tmp/SAMMOVED/
 ---
 
 ## 💻 Modo de uso:
-- Paso 1: Crea un archivo de texto plano en ~/SAM/compare/ con los NOMBRES de los archivos a buscar, SIN su extension (por ejemplo: si el archivo a buscar es "recomendaciones_al_dia.txt" el nombre que se debe colocar es "recomendaciones_al_dia", sin las comillas dobles).
+- Paso 1: Crea un archivo de texto plano en ~/SAM/compare/ con los NOMBRES de los archivos a buscar, SIN su extension y un solo nombre por linea (por ejemplo: si el archivo a buscar es "recomendaciones_al_dia.txt" el nombre que se debe colocar es "recomendaciones_al_dia", sin las comillas dobles).
 - Paso 2: Ejecuta el script, y selecciona el origen a escanear: Puede ser un dispositivo USB externo (pendrive, SSD o disco mecanico) o un directorio de tu home.
 - Paso 3: De el origen del paso 2, selecciona el directorio a escanear, el escaneo del directorio base seleccionado es recursivo (/media/$USER o $HOME).
 - Paso 4: Ingresa una extension para escanear, con la cual se generara el catalogo de busqueda (solo la extension "a secas": pdf, doc, txt, mp3, jpg, etc.).

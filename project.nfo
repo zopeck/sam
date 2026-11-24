@@ -1,6 +1,4 @@
 [START]
-# Comentamos porque sam no es un programa que se ejecuta de forma atomica:
-# [ -n "$USER" ] && nohup /usr/local/bin/sam.sh >/dev/null 2>&1 &
 
 [STOP]
 sudo pkill -f "sam.sh"

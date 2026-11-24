@@ -70,5 +70,5 @@ Los archivos procesados se mueven a la ubicación local segura:/tmp/SAMMOVED/
 ---
 
 ## 📜 Licencia y Autoria:
-Autor: "Mark" Marco A. Rodriguez G. (@zopeck, zopeck@gmail.com)
-Licencia: GNU General Public License v3.0 (GPLv3). Consulta el archivo COPYING para más detalles.
+- Autor: "Mark" Marco A. Rodriguez G. (@zopeck, zopeck@gmail.com)
+- Licencia: GNU General Public License v3.0 (GPLv3). Consulta el archivo COPYING para más detalles.

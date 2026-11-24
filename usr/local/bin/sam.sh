@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# sam_RC_ver4_23ene2020_00:20
-
 # =============================================================================
 #  NOTAS DE LA REVISIÓN (19-nov-2026)
 #  Se mantiene la UX (pantallas, textos, orden de pasos) y la mecánica:
@@ -72,6 +70,53 @@ SAMWORK=""; SAMSESSION=""
 # -----------------------------------------------------------------------------
 # 3. FUNCIONES
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Función para detectar y gestionar instancias previas de sam.sh
+# -----------------------------------------------------------------------------
+verificar_instancia_unica() {
+    local script_nombre
+    script_nombre="$(basename "$0")"
+    
+    # Obtenemos los PIDs de otros procesos ejecutando este mismo script (excluyendo PID actual $$)
+    local pids_activos
+    pids_activos=$(pgrep -f "$script_nombre" | grep -v "^$$$" || true)
+
+    if [ -n "$pids_activos" ]; then
+        echo -e "\n[!] ALERTA: Se detectó otra instancia de '$script_nombre' en ejecución (PID/s: $pids_activos)."
+        read -r -p "¿Desea finalizar la instancia anterior para continuar? [s/N]: " RESPUESTA
+        
+        case "$RESPUESTA" in
+            [sS]|[sS][eE][sS])
+                echo "Enviando señal de terminación a los procesos: $pids_activos..."
+                kill -15 $pids_activos 2>/dev/null || true
+                sleep 1
+                
+                # Verificamos si aún existen procesando y forzamos cierre si es necesario
+                pids_restantes=$(pgrep -f "$script_nombre" | grep -v "^$$$" || true)
+                if [ -n "$pids_restantes" ]; then
+                    echo "Forzando cierre (SIGKILL)..."
+                    kill -9 $pids_restantes 2>/dev/null || true
+                    sleep 1
+                fi
+                
+                # Comprobación final
+                if pgrep -f "$script_nombre" | grep -v "^$$$" >/dev/null 2>&1; then
+                    echo "[X] Error: No se pudo finalizar la instancia anterior. Abortando."
+                    exit 1
+                else
+                    echo "[✓] Instancia anterior finalizada con éxito. Continuamos."
+                fi
+                ;;
+            *)
+                echo "Operación cancelada por el usuario. Abortando."
+                exit 1
+                ;;
+        esac
+    fi
+}
+# Invocar la verificación al iniciar el script:
+verificar_instancia_unica
 
 # Borra los temporales al salir (normal, error o Ctrl+C).
 CLEANUP () {

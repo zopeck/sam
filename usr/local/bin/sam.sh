@@ -22,6 +22,14 @@
 #  Eficiencia
 #   - Comparación en una sola pasada con grep -Fx (antes: 4 procesos por
 #     archivo y bucle doble), du en lote, sin expr/rev/cut/xargs en bucles.
+#   - Movimiento en lote (MOVE_ALL_FILES): plan de nombres en memoria, un solo
+#     proceso para todos los renombrados y reporte escrito una vez (antes: un
+#     mv, un glob del destino y una escritura al reporte por cada archivo).
+#   - Movimiento y borrado en flujo: los datos de la sesión van a un archivo en disco y
+#     un solo proceso perl hace el trabajo (memoria acotada aunque haya cientos de miles
+#     de archivos). Borrado: se deja la base y una copia por cada contenido distinto.
+#   - Enlaces simbólicos que el movimiento dejó rotos: se avisa al final con un reporte
+#     (~/SAM/reports/brokenlinks) y se ofrece borrarlos.
 #  Errores corregidos
 #   - Línea en blanco extra al final del reporte "filesfound" (i <= N).
 #   - MAX nunca se reiniciaba entre archivos; "010" se leía como octal.
@@ -57,6 +65,9 @@ FILESYSTEM="100"
 DATEstartprogram=$(date +%Y_%b_%d_%H:%M:%S)
 BASHVER=${BASH_VERSINFO[0]}      # versión del bash que realmente ejecuta el script
 TMPFLAT=""; TMPNAMES=""; TMPSTEMS=""
+# Datos de la sesión EN DISCO (no en arreglos): directorio de trabajo temporal dentro de
+# $SAMHOME y archivo con el registro "base -> copia" de lo movido en esta ejecución.
+SAMWORK=""; SAMSESSION=""
 
 # -----------------------------------------------------------------------------
 # 3. FUNCIONES
@@ -65,6 +76,7 @@ TMPFLAT=""; TMPNAMES=""; TMPSTEMS=""
 # Borra los temporales al salir (normal, error o Ctrl+C).
 CLEANUP () {
 	rm -f -- "$TMPFLAT" "$TMPNAMES" "$TMPSTEMS"
+	[[ -n "$SAMWORK" && "$SAMWORK" == "$SAMHOME"/work.* && -d "$SAMWORK" ]] && rm -rf -- "$SAMWORK"
 }
 trap CLEANUP EXIT
 
@@ -222,29 +234,233 @@ INPUT_FILEEXT () {
 # Mueve UN archivo ($1) a $MOVEDESTDIR. Si ya existe uno con ese nombre, el
 # existente se renombra a NOMBRE_N (N = mayor sufijo numérico actual + 1) y el
 # nuevo ocupa el nombre original. Solo se anota en el reporte si el mv funcionó.
-MOVE_ONE_FILE () {
-	local src="$1" name dest item rest max newsuf
-	name=${src##*/}
-	dest="$MOVEDESTDIR$name"
+# -----------------------------------------------------------------------------
+# MOVIMIENTO Y BORRADO EN FLUJO (memoria acotada, datos de la sesión en DISCO)
+#
+#  * La lista de la sesión (qué copia se movió y cuál es su base) se escribe a un
+#    archivo en $SAMWORK (dentro de $SAMHOME, en disco), no a arreglos de bash.
+#  * El movimiento lo hace UN solo proceso perl que lee la lista por stdin. Su única
+#    memoria es un contador por nombre con sufijo _N: crece con la cantidad de
+#    NOMBRES distintos, no con la de archivos. "¿Ya existe?" se pregunta al sistema
+#    de archivos (un lstat), no a una tabla en RAM.
+#  * El borrado ordena ese archivo con "sort" (ordenamiento externo: si no cabe en
+#    memoria usa archivos temporales) y lo procesa grupo por grupo (un grupo = un
+#    nombre base). Solo se guarda en memoria el grupo en curso.
+#
+# Reglas del borrado, por cada grupo (base + sus copias de ESTA sesión, en el
+# orden en que se movieron, es decir, de menor a mayor sufijo):
+#   1) la base NUNCA se borra;
+#   2) una copia idéntica (byte a byte) a la base se borra;
+#   3) entre las copias que difieren de la base, de las idénticas entre sí se deja
+#      solo la de menor sufijo;
+#   4) el contenido distinto se conserva siempre. Nada fuera de la sesión se toca.
+# Se borra únicamente si queda en disco un archivo idéntico, así que un fallo no
+# puede destruir contenido único.
+# -----------------------------------------------------------------------------
+read -r -d '' SAM_PERL_MOVER <<'PERLEOF' || true
+use strict; use warnings; use Fcntl qw(O_RDONLY O_WRONLY O_CREAT O_EXCL);
+my ($destdir, $report, $session) = @ARGV;           # $destdir termina en "/"
+$/ = "\0";
 
-	if [[ -e "$dest" || -L "$dest" ]]; then
-		# Busca sufijos numéricos exactos NOMBRE_<dígitos> (sin evaluar aritmética).
-		max=0
-		for item in "$dest"_*; do
-			rest=${item#"$dest"_}
-			if [[ "$rest" =~ ^[0-9]{1,9}$ ]] && (( 10#$rest > max )); then
-				max=$(( 10#$rest ))
-			fi
-		done
-		newsuf=$(( max + 1 ))
-		if mv -- "$dest" "${dest}_${newsuf}" && mv -- "$src" "$MOVEDESTDIR"; then
-			printf '%s with NEWSUFIX _%s\n' "$src" "$newsuf" >> "$MOVEDFILES"
-		fi
-	else
-		if mv -- "$src" "$MOVEDESTDIR"; then
-			printf '%s\n' "$src" >> "$MOVEDFILES"
-		fi
+sub split_name {                                    # "a.b.txt" -> ("a.b", ".txt"); "Makefile" -> ("Makefile", "")
+	my $i = rindex($_[0], '.');
+	return $i < 0 ? ($_[0], '') : (substr($_[0], 0, $i), substr($_[0], $i));
+}
+my %maxsuf;                                         # "base\x01.ext" -> mayor N de base_N.ext
+sub note_name {
+	my ($b, $e) = split_name($_[0]);
+	if ($b =~ /^(.*)_([0-9]{1,9})\z/s) {
+		my ($k, $n) = ("$1\x01$e", $2 + 0);
+		$maxsuf{$k} = $n if $n > ($maxsuf{$k} // 0);
+	}
+}
+sub copy_move {                                     # otro sistema de archivos (EXDEV): copiar, verificar, borrar origen
+	my ($s, $t) = @_;
+	return 0 if -l $s || !-f $s;
+	my @st = stat($s) or return 0;
+	sysopen(my $in, $s, O_RDONLY) or return 0;
+	sysopen(my $dst, $t, O_WRONLY|O_CREAT|O_EXCL, $st[2] & 07777) or do { close $in; return 0; };
+	my ($ok, $buf, $total) = (1, '', 0);
+	while ($ok) {
+		my $n = sysread($in, $buf, 1 << 20);
+		if (!defined $n) { $ok = 0; last; }
+		last if $n == 0;
+		my $off = 0;
+		while ($off < $n) {
+			my $w = syswrite($dst, $buf, $n - $off, $off);
+			if (!defined $w) { $ok = 0; last; }
+			$off += $w;
+		}
+		$total += $n;
+	}
+	close $in;
+	$ok = 0 unless close($dst) && $total == $st[7];
+	if ($ok) {
+		chmod($st[2] & 07777, $t); utime($st[8], $st[9], $t); chown($st[4], $st[5], $t);
+		$ok = unlink($s) ? 1 : 0;
+	}
+	unlink($t) unless $ok;
+	return $ok;
+}
+sub move_one {                                      # nunca pisa un archivo existente
+	my ($s, $t) = @_;
+	return 0 if -e $t || -l $t;
+	return 1 if rename($s, $t);
+	return copy_move($s, $t) if $!{EXDEV};
+	return 0;
+}
+
+opendir(my $dh, $destdir) or die "SAM: cannot read $destdir: $!\n";
+while (defined(my $e = readdir $dh)) { note_name($e) unless $e eq '.' || $e eq '..'; }
+closedir $dh;
+
+open(my $rep, '>>', $report)  or die "SAM: cannot write $report: $!\n";
+open(my $ses, '>>', $session) or die "SAM: cannot write $session: $!\n";
+my ($moved, $failed) = (0, 0);
+while (defined(my $src = <STDIN>)) {
+	chomp $src;
+	my ($name) = $src =~ m{([^/]*)\z};
+	my $dest = $destdir . $name;
+	if (-e $dest || -l $dest) {                     # nombre ocupado -> nombre_N.ext (la primera copia no se toca)
+		my ($b, $e) = split_name($name);
+		my $n = ($maxsuf{"$b\x01$e"} // 0) + 1;
+		my $tname = "${b}_${n}${e}";
+		if (move_one($src, $destdir . $tname)) {
+			note_name($tname); $moved++;
+			print $rep "$src with NEWSUFIX _$n\n";
+			print $ses "$dest\x01$destdir$tname\0";
+		} else { $failed++; print STDERR "SAM: could not move: $src\n"; }
+	} else {
+		if (move_one($src, $dest)) {
+			note_name($name); $moved++;
+			print $rep "$src\n";
+		} else { $failed++; print STDERR "SAM: could not move: $src\n"; }
+	}
+}
+close $rep; close $ses;
+print "$moved $failed\n";
+PERLEOF
+
+MOVE_ALL_FILES () {
+	local RESULT
+	MOVED_OK=0; MOVED_FAIL=0
+	: > "$SAMSESSION"
+	(( ${#FILESTOMOVE[@]} > 0 )) || return 0
+	RESULT=$( printf '%s\0' "${FILESTOMOVE[@]}" | perl -e "$SAM_PERL_MOVER" -- "$MOVEDESTDIR" "$MOVEDFILES" "$SAMSESSION" )
+	if [[ "$RESULT" =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
+		MOVED_OK=${BASH_REMATCH[1]}; MOVED_FAIL=${BASH_REMATCH[2]}
 	fi
+}
+
+read -r -d '' SAM_PERL_DELETER <<'PERLEOF' || true
+use strict; use warnings;
+$/ = "\0";
+sub fp {                                            # huella barata: tamaño + primeros 4 KB
+	my @st = stat($_[0]) or return undef;
+	open(my $f, '<:raw', $_[0]) or return undef;
+	my $buf = ''; my $r = read($f, $buf, 4096); close $f;
+	return defined $r ? "$st[7]:$buf" : undef;
+}
+sub same {                                          # comparación completa byte a byte
+	open(my $fa, '<:raw', $_[0]) or return 0;
+	open(my $fb, '<:raw', $_[1]) or return 0;
+	my ($x, $y);
+	while (1) {
+		my $ra = read($fa, $x, 1 << 20);
+		my $rb = read($fb, $y, 1 << 20);
+		return 0 unless defined $ra && defined $rb;
+		return 0 if $ra != $rb || $x ne $y;
+		return 1 if $ra == 0;
+	}
+}
+my ($del, $kept, $nobase) = (0, 0, 0);
+my ($curbase, $basegood, %reps);                    # %reps: huella -> [archivos que SE QUEDAN con ese contenido]
+while (defined(my $rec = <STDIN>)) {
+	chomp $rec;
+	my $i = index($rec, "\x01"); next if $i < 0;
+	my ($base, $copy) = (substr($rec, 0, $i), substr($rec, $i + 1));
+	if (!defined $curbase || $base ne $curbase) {   # empieza un grupo nuevo
+		$curbase = $base; %reps = (); $basegood = 0;
+		if (-f $base && !-l $base) {
+			my $k = fp($base);
+			if (defined $k) { $reps{$k} = [$base]; $basegood = 1; }
+		}
+	}
+	next if !-f $copy || -l $copy;                  # la copia ya no está: nada que hacer
+	if (!$basegood) { $nobase++; next; }            # sin base verificable no se borra nada
+	my $k = fp($copy);
+	if (!defined $k) { $kept++; next; }
+	my $dup = 0;
+	if ($reps{$k}) { for my $r (@{ $reps{$k} }) { if (same($r, $copy)) { $dup = 1; last; } } }
+	if ($dup) { $del++ if unlink($copy); }
+	else      { push @{ $reps{$k} }, $copy; $kept++; }
+}
+print "$del $kept $nobase\n";
+PERLEOF
+
+DELETE_SESSION_DUPLICATES () {
+	local RESULT
+	DELETED=0; KEPTDIFF=0; NOBASE=0
+	[[ -s "$SAMSESSION" ]] || return 0
+	RESULT=$( LC_ALL=C sort -z -s -t $'\x01' -k1,1 -S 64M -T "$SAMWORK" "$SAMSESSION" | perl -e "$SAM_PERL_DELETER" )
+	if [[ "$RESULT" =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+		DELETED=${BASH_REMATCH[1]}; KEPTDIFF=${BASH_REMATCH[2]}; NOBASE=${BASH_REMATCH[3]}
+	fi
+}
+
+# -----------------------------------------------------------------------------
+# ENLACES SIMBÓLICOS ROTOS POR EL MOVIMIENTO
+# Mover un archivo deja colgando los enlaces simbólicos que apuntaban a él. Para
+# identificar SOLO los que rompió esta sesión (y no los que ya estaban rotos) se
+# toma una lista de enlaces rotos del directorio escaneado ANTES de mover y otra
+# DESPUÉS; la diferencia son los nuevos. Todo va a archivos en disco (memoria
+# constante). Solo se ven los enlaces que estén dentro del directorio escaneado.
+# -----------------------------------------------------------------------------
+BROKEN_N=0; BROKENREPORT=""
+
+SNAPSHOT_BROKEN_LINKS () {                          # $1 = archivo de salida (rutas ordenadas, separadas por NUL)
+	find "$BASEDIRECTORY" -xtype l -print0 2> /dev/null | LC_ALL=C sort -z -S 64M -T "$SAMWORK" > "$1"
+}
+
+FIND_NEW_BROKEN_LINKS () {                          # llamar justo DESPUÉS de mover
+	BROKEN_N=0; BROKENREPORT=""
+	SNAPSHOT_BROKEN_LINKS "$SAMWORK/links_after.bin"
+	LC_ALL=C comm -z -13 "$SAMWORK/links_before.bin" "$SAMWORK/links_after.bin" > "$SAMWORK/links_broken.bin"
+	BROKEN_N=$(tr -cd '\0' < "$SAMWORK/links_broken.bin" | wc -c)
+	if (( BROKEN_N > 0 )); then
+		mkdir -p -- "$REPORTSDIR/brokenlinks"
+		BROKENREPORT="$REPORTSDIR/brokenlinks/${USER}_filetype_${FILEEXT_RPT}_${CURRDATE}.txt"
+		xargs -0 -a "$SAMWORK/links_broken.bin" ls -ld -- >> "$BROKENREPORT" 2> /dev/null
+	fi
+}
+
+SHOW_BROKEN_LINKS () {                              # llamar al FINAL, antes del mensaje de cierre
+	local ANSWER="" f DELETEDLINKS=0
+	(( BROKEN_N > 0 )) || return 0
+	echo ""
+	echo "${BOLD}Broken symbolic links${RESET}"
+	echo "Moving files left $BROKEN_N symbolic link(s) pointing to files that are no longer in their original place."
+	echo "Only links inside $BASEDIRECTORY are checked. Report with the full list (link -> target):"
+	echo "$BROKENREPORT"
+	echo ""
+	until [[ "$ANSWER" == "y" || "$ANSWER" == "n" ]]; do
+		read -n 1 -s -r -p "Press ${GREEN_BG}\"y\"${BG_OFF} to ${GREEN_BG}delete these $BROKEN_N broken link(s)${BG_OFF} or ${GREEN_BG}\"n\"${BG_OFF} to ${GREEN_BG}keep them${BG_OFF}: " ANSWER
+		echo ""
+	done
+	if [[ "$ANSWER" == "y" ]]; then
+		# Solo se borra lo que SIGUE siendo un enlace y SIGUE roto (por si algo cambió mientras tanto).
+		while IFS= read -r -d '' f; do
+			[[ -L "$f" && ! -e "$f" ]] && printf '%s\0' "$f"
+		done < "$SAMWORK/links_broken.bin" > "$SAMWORK/links_confirmed.bin"
+		xargs -0 -a "$SAMWORK/links_confirmed.bin" rm -f -- 2> /dev/null
+		while IFS= read -r -d '' f; do
+			[[ -L "$f" ]] || DELETEDLINKS=$(( DELETEDLINKS + 1 ))
+		done < "$SAMWORK/links_confirmed.bin"
+		echo "Broken links deleted: $DELETEDLINKS"
+	else
+		echo "No links were deleted. You can review them in the report above."
+	fi
+	echo ""
 }
 
 # -----------------------------------------------------------------------------
@@ -370,12 +586,12 @@ elif [[ $UID = 0 ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 8. PROGRAMAS REQUERIDOS: dos2unix, moreutils, dc, fdupes
+# 8. PROGRAMAS REQUERIDOS: dos2unix, moreutils, dc, perl-base
 #    (un solo bucle en vez de cuatro bloques casi idénticos; mismo orden y
 #    mismos mensajes que el original)
 # -----------------------------------------------------------------------------
 MISSINGPKGS=()
-for PROGRAMREQ in dos2unix moreutils dc fdupes; do
+for PROGRAMREQ in dos2unix moreutils dc perl-base; do
 	IS_PKG_INSTALLED "$PROGRAMREQ" || MISSINGPKGS+=("$PROGRAMREQ")
 done
 
@@ -628,6 +844,22 @@ if (( ${#FILESTOMOVE[@]} == 0 )); then
 	echo "moved to $MOVEDESTDIR. Please take a look at the \"$HOME/SAM/compare\" folder and look at the files listed there and compare"
 	echo "the contents of those files against the existing files in the $MOVEDESTDIR directory."
 	echo ""
+
+	# Pista frecuente: cada línea del archivo se compara contra el nombre del archivo SIN su
+	# última extensión; si las líneas traen la extensión (p. ej. "reporte_1.txt") no coinciden.
+	EXTHINT=0; EXTSAMPLE=""
+	for LINEHINT in "${FLATTXTCONT[@]}"; do
+		if [[ "${LINEHINT,,}" == *".${FILEEXT,,}" ]]; then
+			EXTHINT=$(( EXTHINT + 1 ))
+			[[ -z "$EXTSAMPLE" ]] && EXTSAMPLE="$LINEHINT"
+		fi
+	done
+	if (( EXTHINT > 0 )); then
+		echo "${HILITE}Hint:${RESET} $EXTHINT line(s) of the selected file end in \".$FILEEXT\" (for example: \"$EXTSAMPLE\")."
+		echo "SAM compares each line against the file name WITHOUT its extension, so please write the names without \".$FILEEXT\""
+		echo "(for example \"${EXTSAMPLE%.*}\" instead of \"$EXTSAMPLE\") and try again."
+		echo ""
+	fi
 	exit 0
 else
 	echo "The number of files we have to move is: " "${#FILESTOMOVE[@]}"
@@ -703,13 +935,21 @@ CURRDATE=$(date +%Y_%b_%d_%H:%M:%S)
 STARTTIME=$(date '+%s')
 echo "Moving files started at: $CURRDATE"
 
-# Reporte "Moved files" (la ruta se fija antes del bucle, que la usa en MOVE_ONE_FILE).
+# Reporte "Moved files" (la ruta se fija antes de mover, porque MOVE_ALL_FILES la usa).
 MOVEDFILES="$REPORTSDIR/movedfiles/${USER}_filetype_${FILEEXT_RPT}_${CURRDATE}.txt"
 
-# Un mv directo por archivo (antes: echo + xargs + mv, con problemas de comillas).
-for FILETOMOVE in "${FILESTOMOVE[@]}"; do
-	MOVE_ONE_FILE "$FILETOMOVE"
-done
+# Directorio de trabajo en disco para esta sesión (se borra solo al salir, ver CLEANUP).
+SAMWORK=$(mktemp -d "$SAMHOME/work.XXXXXX") || exit 1
+SAMSESSION="$SAMWORK/session.bin"
+
+# Enlaces simbólicos que ya estaban rotos ANTES de mover (para no atribuirnos esos).
+SNAPSHOT_BROKEN_LINKS "$SAMWORK/links_before.bin"
+
+# Movimiento en flujo (un solo proceso; ver MOVE_ALL_FILES).
+MOVE_ALL_FILES
+
+# Enlaces que el movimiento dejó rotos (lista y reporte; el aviso se muestra al final).
+FIND_NEW_BROKEN_LINKS
 
 echo ""
 ENDTIME=$(date '+%s')
@@ -786,16 +1026,29 @@ until [[ "$DELDUPFILES" == "y" || "$DELDUPFILES" == "n" ]]; do
 	read -n 1 -s -r -p "Press ${GREEN_BG}\"y\"${BG_OFF} to ${GREEN_BG}delete all duplicates${BG_OFF} or ${GREEN_BG}\"n\"${BG_OFF} to ${GREEN_BG}exit${BG_OFF} (no changes will be made): " DELDUPFILES
 	echo ""
 done
+
 if [ "$DELDUPFILES" = "y" ]; then
 	echo ""
 	echo "Are you ABSOLUTELY sure? This is your last chance..."
 	echo ""
 	WAIT_KEY "PRESS \"Ctrl + C\" to abort or ANY KEY to continue..."
-	# Se conserva "2>&1 > /dev/null": stdout se descarta pero los errores siguen visibles.
-	fdupes -AqdN -r "$MOVEDESTDIR" 2>&1 > /dev/null
+
+	# -------------------------------------------------------------------------
+	# DEDUPLICACIÓN AISLADA POR SESIÓN (ver DELETE_SESSION_DUPLICATES)
+	# Por cada nombre: se conserva la base y, de las copias distintas a ella, una sola por
+	# cada contenido distinto (la de menor sufijo). Solo se tocan archivos de ESTA sesión.
+	TIMEFORMAT=$'\nDeletion time: %R s (real) | %U s (user) | %S s (sys)'
+	time DELETE_SESSION_DUPLICATES
+	echo ""
+	echo "Duplicates deleted: $DELETED (the base of each group, and one copy of each distinct content, were kept)."
+	(( KEPTDIFF > 0 )) && echo "Kept because their content differs from the base (one per distinct content): $KEPTDIFF"
+	(( NOBASE > 0 )) && echo "Kept because their base file was not found: $NOBASE"
 	echo ""
 	echo ""
 fi
+
+# Aviso (y borrado opcional) de los enlaces simbólicos que quedaron rotos por el movimiento.
+SHOW_BROKEN_LINKS
 
 echo "${LRED_BG}IT'S DONE${BG_OFF}"
 echo ""

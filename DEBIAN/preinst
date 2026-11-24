@@ -1,0 +1,10 @@
+#!/bin/bash
+set -e
+
+# Asegurar que el entorno de ejecución cumple con Bash 4+
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    echo "ERROR: SAM requiere Bash versión 4.0 o superior." >&2
+    exit 1
+fi
+
+exit 0

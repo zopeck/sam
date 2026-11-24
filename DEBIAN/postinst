@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    configure)
+        # Asignar permisos de ejecución al binario principal
+        if [ -f /usr/local/bin/sam.sh ]; then
+            chmod 755 /usr/local/bin/sam.sh
+            # Crear enlace simbólico ejecutable global 'sam' si no existe
+            ln -sf /usr/local/bin/sam.sh /usr/local/bin/sam
+        fi
+        ;;
+    *)
+        ;;
+esac
+
+exit 0

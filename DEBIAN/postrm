@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    remove|purge)
+        # Eliminar el enlace simbólico global creado en postinst
+        if [ -L /usr/local/bin/sam ]; then
+            rm -f /usr/local/bin/sam
+        fi
+        ;;
+    *)
+        ;;
+esac
+
+exit 0

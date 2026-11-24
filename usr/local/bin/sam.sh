@@ -37,6 +37,52 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# Control de instancia única mediante descriptor de archivo y flock (Sin pgrep)
+# -----------------------------------------------------------------------------
+LOCKFILE="/tmp/sam.lock"
+
+# Abrimos el archivo de bloqueo en el descriptor 200
+exec 200>"$LOCKFILE"
+
+# Intentamos obtener un candado exclusivo no bloqueante (-n)
+if ! flock -n 200; then
+    # Si el candado está ocupado, leemos el PID registrado en el archivo
+    PID_EXISTENTE=$(cat "$LOCKFILE" 2>/dev/null || echo "desconocido")
+    
+    echo -e "\n[!] ALERTA: Se detectó otra instancia activa de SAM (PID: $PID_EXISTENTE)."
+    read -r -p "¿Desea finalizar la instancia anterior para continuar? [s/N]: " RESPUESTA
+    
+    case "$RESPUESTA" in
+        [sS]|[sS][eE][sS])
+            if [ "$PID_EXISTENTE" != "desconocido" ] && kill -0 "$PID_EXISTENTE" 2>/dev/null; then
+                echo "Finalizando proceso PID $PID_EXISTENTE..."
+                kill -15 "$PID_EXISTENTE" 2>/dev/null || true
+                sleep 1
+                if kill -0 "$PID_EXISTENTE" 2>/dev/null; then
+                    echo "Forzando cierre (SIGKILL)..."
+                    kill -9 "$PID_EXISTENTE" 2>/dev/null || true
+                    sleep 1
+                fi
+            fi
+            
+            # Reintentamos tomar el candado
+            if ! flock -n 200; then
+                echo "[X] Error: No se pudo liberar el bloqueo. Abortando."
+                exit 1
+            fi
+            echo "[✓] Instancia anterior finalizada. Continuamos."
+            ;;
+        *)
+            echo "Operación cancelada por el usuario. Abortando."
+            exit 1
+            ;;
+    esac
+fi
+
+# Guardamos el PID de la instancia actual en el archivo de bloqueo
+echo "$$" >&200
+
+# -----------------------------------------------------------------------------
 # 1. CÓDIGOS ANSI (reemplazan los cientos de $( echo -e ... ) del original;
 #    la salida en pantalla es idéntica pero sin lanzar un subproceso por color)
 # -----------------------------------------------------------------------------
@@ -70,53 +116,6 @@ SAMWORK=""; SAMSESSION=""
 # -----------------------------------------------------------------------------
 # 3. FUNCIONES
 # -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Función para detectar y gestionar instancias previas de sam.sh
-# -----------------------------------------------------------------------------
-verificar_instancia_unica() {
-    local script_nombre
-    script_nombre="$(basename "$0")"
-    
-    # Obtenemos los PIDs de otros procesos ejecutando este mismo script (excluyendo PID actual $$)
-    local pids_activos
-    pids_activos=$(pgrep -f "$script_nombre" | grep -v "^$$$" || true)
-
-    if [ -n "$pids_activos" ]; then
-        echo -e "\n[!] ALERTA: Se detectó otra instancia de '$script_nombre' en ejecución (PID/s: $pids_activos)."
-        read -r -p "¿Desea finalizar la instancia anterior para continuar? [s/N]: " RESPUESTA
-        
-        case "$RESPUESTA" in
-            [sS]|[sS][eE][sS])
-                echo "Enviando señal de terminación a los procesos: $pids_activos..."
-                kill -15 $pids_activos 2>/dev/null || true
-                sleep 1
-                
-                # Verificamos si aún existen procesando y forzamos cierre si es necesario
-                pids_restantes=$(pgrep -f "$script_nombre" | grep -v "^$$$" || true)
-                if [ -n "$pids_restantes" ]; then
-                    echo "Forzando cierre (SIGKILL)..."
-                    kill -9 $pids_restantes 2>/dev/null || true
-                    sleep 1
-                fi
-                
-                # Comprobación final
-                if pgrep -f "$script_nombre" | grep -v "^$$$" >/dev/null 2>&1; then
-                    echo "[X] Error: No se pudo finalizar la instancia anterior. Abortando."
-                    exit 1
-                else
-                    echo "[✓] Instancia anterior finalizada con éxito. Continuamos."
-                fi
-                ;;
-            *)
-                echo "Operación cancelada por el usuario. Abortando."
-                exit 1
-                ;;
-        esac
-    fi
-}
-# Invocar la verificación al iniciar el script:
-verificar_instancia_unica
 
 # Borra los temporales al salir (normal, error o Ctrl+C).
 CLEANUP () {
